@@ -4,7 +4,7 @@ project(pathFinding)
 
 set(CMAKE_CXX_STANDARD 17)
 
-add_executable(pathFinding main.cpp)
+add_executable(pathFinding main.cpp "Maze.cpp")
 
 target_include_directories(pathFinding PRIVATE
 	C:/dev/OpenCL-SDK/install/include	

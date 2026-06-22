@@ -1,29 +1,33 @@
 #include <CL/cl.h>
 #include <iostream>
+#include "Maze.h"
 
 int main() {
-    cl_uint platformCount = 0;
-    clGetPlatformIDs(1, nullptr, &platformCount);
+    
+    int width = 20;
+    int height = 20;
 
-    cl_platform_id platform;
-    clGetPlatformIDs(1, &platform, nullptr);
+    Maze maze(width, height);
 
-    cl_uint deviceCount = 0;
-    clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, 1, nullptr, &deviceCount);
+    // labirintus generálása
+    maze.generateSimple();
 
-    cl_device_id device;
-    clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, 1, &device, nullptr);
+    // debug kiírás konzolra
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            uint8_t cell = maze.get(x, y);
 
-    char name[128];
-    clGetDeviceInfo(device, CL_DEVICE_NAME, sizeof(name), name, nullptr);
-
-    std::cout << "Device: " << name << std::endl;
-
-    cl_uint computeUnits;
-    clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS,
-        sizeof(computeUnits), &computeUnits, nullptr);
-
-    std::cout << "Compute Units: " << computeUnits << std::endl;
-
+            switch (cell)
+            {
+            case 0: std::cout << "#"; break; // WALL
+            case 1: std::cout << "."; break; // EMPTY
+            case 2: std::cout << "S"; break; // START
+            case 3: std::cout << "G"; break; // GOAL
+            }
+        }
+        std::cout << "\n";
+    }
     return 0;
 }
