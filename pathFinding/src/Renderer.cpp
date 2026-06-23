@@ -176,3 +176,52 @@ void Renderer::drawMaze(const Maze& maze) {
         }
     }
 }
+
+void Renderer::drawMaze(const Maze& maze, const BFS& bfs, int pathRevealCount) {
+    const auto& dist = bfs.getDistances();
+    const auto& path = bfs.getPath(); // goal -> ... -> start sorrendben tárolva
+
+    // 1) alap labirintus (fal / üres / start / goal)
+    for (int y = 0; y < mazeHeight; y++) {
+        for (int x = 0; x < mazeWidth; x++) {
+            uint8_t c = maze.get(x, y);
+            switch (c) {
+            case WALL:  drawCell(x, y, 0.f, 0.f, 0.f); break;
+            case EMPTY: drawCell(x, y, 1.f, 1.f, 1.f); break;
+            case START: drawCell(x, y, 0.f, 1.f, 0.f); break;
+            case GOAL:  drawCell(x, y, 1.f, 0.f, 0.f); break;
+            }
+        }
+    }
+
+    // 2) bejárt cellák (BFS "hullám") kiszínezése
+    for (int idx = 0; idx < (int)dist.size(); idx++) {
+        if (dist[idx] < 0) continue;
+
+        int x = idx % mazeWidth;
+        int y = idx / mazeWidth;
+
+        uint8_t c = maze.get(x, y);
+        if (c == START || c == GOAL) continue; // ezeket ne írjuk felül
+
+        drawCell(x, y, 0.6f, 0.8f, 1.0f); // világoskék = bejárt
+    }
+
+    // 3) megtalált útvonal animált megjelenítése
+    if (!path.empty()) {
+        int total = (int)path.size();
+        int revealCount = (pathRevealCount < 0) ? total : std::min(pathRevealCount, total);
+
+        // path[0] = goal, path[last] = start -> start felől animálunk
+        for (int i = 0; i < revealCount; i++) {
+            int idx = path[total - 1 - i];
+            int x = idx % mazeWidth;
+            int y = idx / mazeWidth;
+
+            uint8_t c = maze.get(x, y);
+            if (c == START || c == GOAL) continue;
+
+            drawCell(x, y, 1.0f, 0.65f, 0.0f); // narancssárga = útvonal
+        }
+    }
+}

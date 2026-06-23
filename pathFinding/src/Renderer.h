@@ -2,6 +2,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "Maze.h"
+#include "BFS.h"
 
 class Renderer {
 public:
@@ -14,6 +15,9 @@ public:
     void endFrame();
     void drawCell(int x, int y, float r, float g, float b);
     void drawMaze(const Maze& maze);
+
+    // pathRevealCount: -1 = teljes út azonnal, 0 = még semmi, N = az út első N cellája start felől
+    void drawMaze(const Maze& maze, const BFS& bfs, int pathRevealCount = -1);
 
 private:
     int windowWidth, windowHeight;

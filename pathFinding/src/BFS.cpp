@@ -1,104 +1,129 @@
 #include "BFS.h"
-#include <queue>
-#include <algorithm>
 
-bool BFS::findPath(const Maze& maze) {
-	int w = maze.getWidth();
-	int h = maze.getHeight();
+void BFS::initialize(const Maze& maze)
+{
+    width = maze.getWidth();
+    height = maze.getHeight();
 
-	dist.assign(w * h, -1);
-	parent.assign(w * h, -1);
-	path.clear();
+    dist.assign(width * height, -1);
+    parent.assign(width * height, -1);
+    path.clear();
 
-	auto idx = [w](int x, int y) {
-		return y * w + x;
-		};
-	int start = -1;
-	int goal = -1;
+    while (!frontier.empty())
+    {
+        frontier.pop();
+    }
 
-	for (int y = 0; y < h; y++)
-	{
-		for (int x = 0; x < w; x++)
-		{
-			uint8_t cell = maze.get(x, y);
-			
-			if (cell == START)
-			{
-				start = idx(x, y);
-			}
+    finishedFlag = false;
+    foundFlag = false;
 
-			if (cell == GOAL)
-			{
-				goal = idx(x, y);
-			}
-		}
-	}
+    startIndex = -1;
+    goalIndex = -1;
 
-	if (start == -1 || goal == -1)
-	{
-		return false;
-	}
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            int idx = y * width + x;
 
-	std::queue<int> q;
-	dist[start] = 0;
-	q.push(start);
+            if (maze.get(x, y) == START)
+            {
+                startIndex = idx;
+            }
 
-	int dirs[4][2] =
-	{
-		{ 1, 0},
-		{-1, 0},
-		{ 0, 1},
-		{ 0,-1}
-	};
+            if (maze.get(x, y) == GOAL)
+            {
+                goalIndex = idx;
+            }
+        }
+    }
 
-	while (!q.empty())
-	{
-		int cur = q.front();
-		q.pop();
+    if (startIndex == -1 || goalIndex == -1)
+    {
+        finishedFlag = true;
+        return;
+    }
 
-		if (cur == goal)
-		{
-			break;
-		}
+    dist[startIndex] = 0;
+    frontier.push(startIndex);
+}
 
-		int cx = cur % w;
-		int cy = cur / w;
+bool BFS::step(const Maze& maze)
+{
+    if (finishedFlag)
+    {
+        return true;
+    }
 
-		for (auto& d : dirs) {
-			int nx = cx + d[0];
-			int ny = cy + d[1];
+    if (frontier.empty())
+    {
+        finishedFlag = true;
+        return true;
+    }
 
-			if (nx < 0 || ny < 0 || nx >= w || ny >= h)
-			{
-				continue;
-			}
+    int current = frontier.front();
+    frontier.pop();
 
-			if (maze.get(nx, ny) == WALL)
-				continue;
+    if (current == goalIndex)
+    {
+        reconstructPath(goalIndex);
 
-			int ni = idx(nx, ny);
+        foundFlag = true;
+        finishedFlag = true;
 
-			if (dist[ni] == -1)
-			{
-				dist[ni] = dist[cur] + 1;
-				parent[ni] = cur;
-				q.push(ni);
-			}
-		}
-	}
+        return true;
+    }
 
-	if (dist[goal] == -1)
-		return false;
+    int cx = current % width;
+    int cy = current / width;
 
-	int current = goal;
+    const int dirs[4][2] =
+    {
+        { 1, 0 },
+        { -1, 0 },
+        { 0, 1 },
+        { 0,-1 }
+    };
 
-	while (current != -1)
-	{
-		path.push_back(current);
-		current = parent[current];
-	}
+    for (const auto& d : dirs)
+    {
+        int nx = cx + d[0];
+        int ny = cy + d[1];
 
-	std::reverse(path.begin(), path.end());
+        if (nx < 0 || ny < 0 ||
+            nx >= width || ny >= height)
+        {
+            continue;
+        }
 
-	return true;
+        if (maze.get(nx, ny) == WALL)
+        {
+            continue;
+        }
+
+        int neighbourIndex = ny * width + nx;
+
+        if (dist[neighbourIndex] == -1)
+        {
+            dist[neighbourIndex] = dist[current] + 1;
+            parent[neighbourIndex] = current;
+
+            frontier.push(neighbourIndex);
+        }
+    }
+
+    return false;
+}
+
+void BFS::reconstructPath(int goal)
+{
+    path.clear();
+
+    int current = goal;
+
+    while (current != -1)
+    {
+        path.push_back(current);
+        current = parent[current];
+    }
 }
