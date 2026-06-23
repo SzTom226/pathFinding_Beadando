@@ -1,33 +1,59 @@
 #include <CL/cl.h>
 #include <iostream>
 #include "Maze.h"
+#include "BFS.h"
 
-int main() {
-    
-    int width = 20;
-    int height = 20;
-
-    Maze maze(width, height);
-
-    // labirintus generálása
+int main()
+{
+    Maze maze(20, 20);
     maze.generateSimple();
 
-    // debug kiírás konzolra
-    for (int y = 0; y < height; y++)
+    BFS bfs;
+
+    if (!bfs.findPath(maze))
     {
-        for (int x = 0; x < width; x++)
+        std::cout << "No path found\n";
+        return 0;
+    }
+
+    const auto& path = bfs.getPath();
+
+    int w = maze.getWidth();
+    int h = maze.getHeight();
+
+    for (int y = 0; y < h; y++)
+    {
+        for (int x = 0; x < w; x++)
         {
+            int index = y * w + x;
+
+            bool onPath = false;
+
+            for (int p : path)
+            {
+                if (p == index)
+                {
+                    onPath = true;
+                    break;
+                }
+            }
+
             uint8_t cell = maze.get(x, y);
 
-            switch (cell)
-            {
-            case 0: std::cout << "#"; break; // WALL
-            case 1: std::cout << "."; break; // EMPTY
-            case 2: std::cout << "S"; break; // START
-            case 3: std::cout << "G"; break; // GOAL
-            }
+            if (cell == WALL)
+                std::cout << '#';
+            else if (cell == START)
+                std::cout << 'S';
+            else if (cell == GOAL)
+                std::cout << 'G';
+            else if (onPath)
+                std::cout << '*';
+            else
+                std::cout << '.';
         }
-        std::cout << "\n";
+
+        std::cout << '\n';
     }
+
     return 0;
 }
