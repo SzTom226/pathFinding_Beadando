@@ -1,25 +1,29 @@
 __kernel void bfs_step(
     __global const uchar* maze,
-    __global int* distance,
-    __global int* parent,
-    __global int* frontier,
-    __global int* nextFrontier,
-    __global int* nextCount,
-    const int width,
-    const int height,
-    const int currentDist
+    __global int*         distance,
+    __global int*         parent,
+    __global const int*   frontierList,   // aktív cellák indexei
+    const int             frontierSize,   // hány aktív cella van
+    __global int*         nextFrontierList,
+    __global int*         nextSize,       // atomic counter
+    const int             width,
+    const int             height,
+    const int             currentDist
 )
 {
-    int id = get_global_id(0);
+    int tid = get_global_id(0);
+    if (tid >= frontierSize) return;
 
-    if (frontier[id] == 0)
-    return;
+    // Minden work-item egy frontier-cellát kezel
+    int id = frontierList[tid];
 
     int x = id % width;
     int y = id / width;
 
-    const int dx[4] = { 1, -1, 0, 0 };
-    const int dy[4] = { 0, 0, 1, -1 };
+    const int dx[4] = {  1, -1,  0,  0 };
+    const int dy[4] = {  0,  0,  1, -1 };
+
+    const int newDist = currentDist + 1;
 
     for (int k = 0; k < 4; k++)
     {
@@ -31,16 +35,20 @@ __kernel void bfs_step(
 
         int ni = ny * width + nx;
 
+        // fal = 0 (WALL)
         if (maze[ni] == 0)
             continue;
 
-        if (distance[ni] != -1)
-            continue;
+        // Atomic CAS: csak az első writer jut be, race condition-mentes
+        int old = atomic_cmpxchg(&distance[ni], -1, newDist);
 
-        distance[ni] = distance[id] + 1;
-        parent[ni] = id;
+        if (old == -1)
+        {
+            parent[ni] = id;
 
-        nextFrontier[ni] = 1;
-        atomic_inc(nextCount);
+            // Slot foglalás a nextFrontierList-ben
+            int slot = atomic_inc(nextSize);
+            nextFrontierList[slot] = ni;
+        }
     }
 }

@@ -39,12 +39,16 @@ private:
     cl_mem mazeBuf = nullptr;
     cl_mem distBuf = nullptr;
     cl_mem parentBuf = nullptr;
-    cl_mem frontierBuf = nullptr;
-    cl_mem nextFrontierBuf = nullptr;
-    cl_mem nextCountBuf = nullptr;
+
+    // compact frontier: indexlista + méret
+    cl_mem frontierBuf = nullptr;   // int[] – aktív cellák indexei
+    cl_mem frontierSizeBuf = nullptr;   // int  – hány aktív cella van
+    cl_mem nextFrontierBuf = nullptr;   // int[] – következő szint indexei
+    cl_mem nextSizeBuf = nullptr;   // int  – atomic counter a következő szinthez
 
     std::vector<int> hostDist;
     std::vector<int> hostParent;
     std::vector<int> hostPath;
-    std::vector<int> zeroFrontier;
+
+    int hostFrontierSize = 0;
 };
