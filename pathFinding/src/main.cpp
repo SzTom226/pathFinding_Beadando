@@ -1,9 +1,17 @@
 #include "Renderer.h"
 #include "Maze.h"
 #include "BFS.h"
+#include "OpenCLManager.h"
 
 int main()
 {
+    OpenCLManager clManager;
+
+    if (!clManager.initialize())
+    {
+        return -1;
+    }
+
     Maze maze(20, 20);
     maze.generateRandom();
 
