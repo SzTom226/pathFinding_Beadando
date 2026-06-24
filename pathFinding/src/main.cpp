@@ -1,7 +1,18 @@
 #include "Renderer.h"
 #include "Maze.h"
 #include "BFS.h"
+#include "GPUBFS.h"
+#include "BFSBase.h"
 #include "OpenCLManager.h"
+
+#include <GLFW/glfw3.h>
+#include <iostream>
+
+enum class Mode
+{
+    CPU,
+    GPU
+};
 
 int main()
 {
@@ -9,23 +20,42 @@ int main()
 
     if (!clManager.initialize())
     {
+        std::cout << "OpenCL init failed\n";
         return -1;
     }
 
     Maze maze(20, 20);
     maze.generateRandom();
 
-    BFS bfs;
-    bfs.initialize(maze);
-
-    Renderer renderer(800, 800, 20, 20);
+    Renderer renderer(800, 800, maze.getWidth(), maze.getHeight());
 
     if (!renderer.init())
+    {
+        std::cout << "Renderer init failed\n";
         return -1;
+    }
 
-    // animáció időzítése
-    const double bfsStepInterval = 0.03;   // mp / BFS lépés
-    const double pathStepInterval = 0.04;  // mp / útvonal-cella felfedés
+    Mode mode = Mode::GPU;
+
+    BFSBase* bfs = nullptr;
+
+    if (mode == Mode::CPU)
+    {
+        bfs = new BFS();
+        std::cout << "Using CPU BFS\n";
+    }
+    else
+    {
+        GPUBFS* gpu = new GPUBFS();
+        gpu->setOpenCL(clManager);
+        bfs = gpu;
+        std::cout << "Using GPU BFS\n";
+    }
+
+    bfs->initialize(maze);
+
+    const double bfsStepInterval = 0.03;
+    const double pathStepInterval = 0.04;
 
     double lastBfsStepTime = glfwGetTime();
     double lastPathStepTime = glfwGetTime();
@@ -35,18 +65,21 @@ int main()
     {
         double now = glfwGetTime();
 
-        if (!bfs.finished())
+        if (!bfs->finished())
         {
             if (now - lastBfsStepTime >= bfsStepInterval)
             {
                 lastBfsStepTime = now;
-                bfs.step(maze);
+                bfs->step(maze);
             }
         }
-        else if (bfs.pathFound())
+
+        if (bfs->finished() && bfs->pathFound())
         {
-            int pathLen = (int)bfs.getPath().size();
-            if (pathRevealCount < pathLen && now - lastPathStepTime >= pathStepInterval)
+            int pathLen = (int)bfs->getPath().size();
+
+            if (pathRevealCount < pathLen &&
+                now - lastPathStepTime >= pathStepInterval)
             {
                 lastPathStepTime = now;
                 pathRevealCount++;
@@ -54,8 +87,11 @@ int main()
         }
 
         renderer.beginFrame();
-        renderer.drawMaze(maze, bfs, pathRevealCount);
+        renderer.drawMaze(maze, *bfs, pathRevealCount);
         renderer.endFrame();
     }
+
+    delete bfs;
+
     return 0;
 }

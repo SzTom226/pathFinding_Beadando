@@ -17,7 +17,7 @@ public:
     void drawMaze(const Maze& maze);
 
     // pathRevealCount: -1 = teljes út azonnal, 0 = még semmi, N = az út első N cellája start felől
-    void drawMaze(const Maze& maze, const BFS& bfs, int pathRevealCount = -1);
+    void drawMaze(const Maze& maze, const BFSBase& bfs, int pathRevealCount = -1);
 
 private:
     int windowWidth, windowHeight;

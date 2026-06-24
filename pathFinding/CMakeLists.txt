@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 find_package(OpenGL REQUIRED)
 
-add_executable(pathFinding src/main.cpp src/Maze.cpp src/BFS.cpp src/Renderer.cpp src/OpenCLManager.cpp)
+add_executable(pathFinding src/main.cpp src/Maze.cpp src/BFS.cpp src/Renderer.cpp src/OpenCLManager.cpp src/GPUBFS.cpp)
 
 target_include_directories(pathFinding PRIVATE
 	C:/dev/OpenCL-SDK/install/include	
@@ -22,6 +22,10 @@ target_link_libraries(pathFinding PRIVATE
 
 target_include_directories(pathFinding PRIVATE
     src
+)
+
+target_compile_definitions(pathFinding PRIVATE
+    KERNEL_DIR="${CMAKE_SOURCE_DIR}/kernels/"
 )
 
 add_library(glad

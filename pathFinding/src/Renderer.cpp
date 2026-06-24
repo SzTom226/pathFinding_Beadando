@@ -177,7 +177,7 @@ void Renderer::drawMaze(const Maze& maze) {
     }
 }
 
-void Renderer::drawMaze(const Maze& maze, const BFS& bfs, int pathRevealCount) {
+void Renderer::drawMaze(const Maze& maze, const BFSBase& bfs, int pathRevealCount) {
     const auto& dist = bfs.getDistances();
     const auto& path = bfs.getPath(); // goal -> ... -> start sorrendben tárolva
 
