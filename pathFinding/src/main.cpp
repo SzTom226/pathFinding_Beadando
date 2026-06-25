@@ -11,7 +11,7 @@
 int main()
 {
     // 1) Labirintus
-    Maze maze(50, 50);
+    Maze maze(40, 40);
     maze.generateRandom();
 
     // 2) Renderer + OpenGL context
@@ -41,7 +41,7 @@ int main()
     gpuBfs.initialize(maze);
 
     const double bfsStepInterval = 0.03;
-    const double pathStepInterval = 0.03;
+    const double pathStepInterval = 0.01;
 
     double lastBfsStep = glfwGetTime();
     double lastPathStep = glfwGetTime();
