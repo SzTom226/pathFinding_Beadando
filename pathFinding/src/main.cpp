@@ -8,90 +8,73 @@
 #include <GLFW/glfw3.h>
 #include <iostream>
 
-enum class Mode
-{
-    CPU,
-    GPU
-};
-
 int main()
 {
-    OpenCLManager clManager;
-
-    if (!clManager.initialize())
-    {
-        std::cout << "OpenCL init failed\n";
-        return -1;
-    }
-
-    Maze maze(20, 20);
+    // 1) Labirintus
+    Maze maze(50, 50);
     maze.generateRandom();
 
+    // 2) Renderer + OpenGL context
     Renderer renderer(800, 800, maze.getWidth(), maze.getHeight());
-
-    if (!renderer.init())
-    {
+    if (!renderer.init()) {
         std::cout << "Renderer init failed\n";
         return -1;
     }
 
-    Mode mode = Mode::GPU;
-
-    BFSBase* bfs = nullptr;
-
-    if (mode == Mode::CPU)
-    {
-        bfs = new BFS();
-        std::cout << "Using CPU BFS\n";
-    }
-    else
-    {
-        GPUBFS* gpu = new GPUBFS();
-        gpu->setOpenCL(clManager);
-        bfs = gpu;
-        std::cout << "Using GPU BFS\n";
+    // 3) OpenCL – FONTOS: az OpenGL context létrehozása UTÁN,
+    //    hogy a GL sharing properties érvényesek legyenek
+    OpenCLManager clManager;
+    if (!clManager.initialize()) {
+        std::cout << "OpenCL init failed\n";
+        return -1;
     }
 
-    bfs->initialize(maze);
+    // 4) Interop textúra: GL textúra + CL image ugyanaz a GPU memória
+    if (!renderer.initInterop(clManager.getContext(), clManager.getQueue())) {
+        std::cout << "Interop init failed\n";
+        return -1;
+    }
+
+    // 5) GPUBFS
+    GPUBFS gpuBfs;
+    gpuBfs.setOpenCL(clManager);
+    gpuBfs.initialize(maze);
 
     const double bfsStepInterval = 0.03;
-    const double pathStepInterval = 0.04;
+    const double pathStepInterval = 0.03;
 
-    double lastBfsStepTime = glfwGetTime();
-    double lastPathStepTime = glfwGetTime();
-    int pathRevealCount = 0;
+    double lastBfsStep = glfwGetTime();
+    double lastPathStep = glfwGetTime();
+    int    pathReveal = 0;
 
     while (!renderer.shouldClose())
     {
         double now = glfwGetTime();
 
-        if (!bfs->finished())
-        {
-            if (now - lastBfsStepTime >= bfsStepInterval)
-            {
-                lastBfsStepTime = now;
-                bfs->step(maze);
+        // BFS lépés
+        if (!gpuBfs.finished() && now - lastBfsStep >= bfsStepInterval) {
+            lastBfsStep = now;
+            gpuBfs.step(maze);
+        }
+
+        // Útvonal animáció
+        if (gpuBfs.finished() && gpuBfs.pathFound()) {
+            int pathLen = (int)gpuBfs.getPath().size();
+            if (pathReveal < pathLen && now - lastPathStep >= pathStepInterval) {
+                lastPathStep = now;
+                pathReveal++;
             }
         }
 
-        if (bfs->finished() && bfs->pathFound())
-        {
-            int pathLen = (int)bfs->getPath().size();
+        // Color kernel: distBuf + pathBuf → megosztott GL textúra
+        // CPU roundtrip nélkül, GPU memórián belül
+        gpuBfs.updateColorTexture(renderer.getColorImage(), pathReveal);
 
-            if (pathRevealCount < pathLen &&
-                now - lastPathStepTime >= pathStepInterval)
-            {
-                lastPathStepTime = now;
-                pathRevealCount++;
-            }
-        }
-
+        // Rajzolás: 1 draw call, fullscreen quad
         renderer.beginFrame();
-        renderer.drawMaze(maze, *bfs, pathRevealCount);
+        renderer.drawMazeInterop();
         renderer.endFrame();
     }
-
-    delete bfs;
 
     return 0;
 }

@@ -1,8 +1,10 @@
 #pragma once
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <CL/cl.h>
+#include <CL/cl_gl.h>
 #include "Maze.h"
-#include "BFS.h"
+#include "BFSBase.h"
 
 class Renderer {
 public:
@@ -13,20 +15,34 @@ public:
     bool shouldClose() const;
     void beginFrame();
     void endFrame();
-    void drawCell(int x, int y, float r, float g, float b);
-    void drawMaze(const Maze& maze);
 
-    // pathRevealCount: -1 = teljes út azonnal, 0 = még semmi, N = az út első N cellája start felől
-    void drawMaze(const Maze& maze, const BFSBase& bfs, int pathRevealCount = -1);
+    GLFWwindow* getWindow() const { return window; }
+
+    // Interop init – OpenCL context létrehozása UTÁN hívandó
+    bool initInterop(cl_context clCtx, cl_command_queue clQueue);
+
+    // Az OpenCL color kernel ebbe a shared image-be ír
+    cl_mem getColorImage() const { return clColorImage; }
+
+    // Egyetlen draw call: a colorTex tartalmát kirakja a képernyőre
+    void drawMazeInterop();
 
 private:
     int windowWidth, windowHeight;
     int mazeWidth, mazeHeight;
-    GLFWwindow* window;
+    GLFWwindow* window = nullptr;
 
-    GLuint shaderProgram;
-    GLuint VAO, VBO;
+    // fullscreen quad + texture shader
+    GLuint quadVAO = 0;
+    GLuint quadVBO = 0;
+    GLuint texShader = 0;
+    GLuint colorTex = 0;   // GL_TEXTURE_2D, mazeWidth x mazeHeight, RGBA8
 
-    bool initShaders();
-    bool initQuadBuffers();
+    // OpenCL interop
+    cl_context       clCtx = nullptr;
+    cl_command_queue clQueue = nullptr;
+    cl_mem           clColorImage = nullptr; // clCreateFromGLTexture
+
+    bool initTextureShader();
+    bool initFullscreenQuad();
 };
