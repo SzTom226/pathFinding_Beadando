@@ -1,8 +1,6 @@
 #include "Renderer.h"
 #include "Maze.h"
-#include "BFS.h"
 #include "GPUBFS.h"
-#include "BFSBase.h"
 #include "OpenCLManager.h"
 
 #include <GLFW/glfw3.h>

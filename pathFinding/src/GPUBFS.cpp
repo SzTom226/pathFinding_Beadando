@@ -2,6 +2,13 @@
 #include <fstream>
 #include <iostream>
 
+// -----------------------------------------------------------------------
+// loadFile
+//   Egyszerű segédfüggvény: beolvassa a megadott elérési úton lévő
+//   szöveges fájlt (jelen esetben egy .cl kernel-forrást) teljes
+//   egészében egy std::string-be. Ha a fájl nem létezik/nem olvasható,
+//   üres stringet ad vissza (ezt az initialize() is ellenőrzi).
+// -----------------------------------------------------------------------
 static std::string loadFile(const char* path)
 {
     std::ifstream f(path);
@@ -12,6 +19,13 @@ static std::string loadFile(const char* path)
 // -----------------------------------------------------------------------
 GPUBFS::~GPUBFS() { releaseClResources(); }
 
+// -----------------------------------------------------------------------
+// releaseClResources
+//   Minden korábban lefoglalt OpenCL objektumot (kernel, program, buffer)
+//   felszabadít, és nullptr-re állítja a tagváltozókat. Mind a destruktor,
+//   mind az initialize() (újragenerálás esetén) meghívja, hogy elkerüljük
+//   az erőforrás-szivárgást.
+// -----------------------------------------------------------------------
 void GPUBFS::releaseClResources()
 {
     if (bfsKernel) { clReleaseKernel(bfsKernel);        bfsKernel = nullptr; }
@@ -28,8 +42,15 @@ void GPUBFS::releaseClResources()
     if (pathMaskBuf) { clReleaseMemObject(pathMaskBuf);     pathMaskBuf = nullptr; }
 }
 
+// Beállítja, melyik OpenCLManager-t (context/device/queue) használja a kernelfutáshoz.
 void GPUBFS::setOpenCL(OpenCLManager& manager) { clm = &manager; }
 
+// -----------------------------------------------------------------------
+// buildProgram
+//   Lefordít egy OpenCL programot a megadott forrásszövegből, kiírja a
+//   build-logot (ha van rajta üzenet, pl. figyelmeztetés vagy hiba),
+//   majd létrehozza a megadott nevű kernelt a lefordított programból.
+//   Hiba esetén false-szal tér vissza, és konzolra írja a hibakódot.
 // -----------------------------------------------------------------------
 bool GPUBFS::buildProgram(const std::string& src, const std::string& label,
     cl_program& outProg, cl_kernel& outKernel,
@@ -38,14 +59,18 @@ bool GPUBFS::buildProgram(const std::string& src, const std::string& label,
     const char* csrc = src.c_str();
     cl_int err = CL_SUCCESS;
 
+    // Program létrehozása a forrásszövegből
     outProg = clCreateProgramWithSource(clm->getContext(), 1, &csrc, nullptr, &err);
     if (err != CL_SUCCESS) {
         std::cout << label << ": clCreateProgramWithSource failed: " << err << "\n";
         return false;
     }
 
+    // Fordítás az aktuális eszközre
     err = clBuildProgram(outProg, 0, nullptr, nullptr, nullptr, nullptr);
 
+    // Build log kiolvasása és kiírása (akkor is hasznos, ha sikeres volt
+    // a fordítás, mert figyelmeztetéseket is tartalmazhat)
     size_t logSize = 0;
     clGetProgramBuildInfo(outProg, clm->getDevice(), CL_PROGRAM_BUILD_LOG, 0, nullptr, &logSize);
     if (logSize > 1) {
@@ -59,6 +84,7 @@ bool GPUBFS::buildProgram(const std::string& src, const std::string& label,
         return false;
     }
 
+    // A kernel "kimetszése" a lefordított programból, név alapján
     outKernel = clCreateKernel(outProg, kernelName, &err);
     if (err != CL_SUCCESS) {
         std::cout << label << ": clCreateKernel('" << kernelName << "') failed: " << err << "\n";
@@ -68,6 +94,15 @@ bool GPUBFS::buildProgram(const std::string& src, const std::string& label,
 }
 
 // -----------------------------------------------------------------------
+// initialize
+//   Felkészíti a GPU-s BFS-t egy új labirintusra:
+//     1) felszabadítja az esetlegesen korábbi futásból megmaradt
+//        OpenCL erőforrásokat,
+//     2) megkeresi a START/GOAL cellákat a host oldalon,
+//     3) létrehozza és feltölti az összes GPU buffert (maze, distance,
+//        parent, frontier-listák, pathMask),
+//     4) beolvassa és lefordítja a bfs.cl és color.cl kernel-forrásokat.
+// -----------------------------------------------------------------------
 void GPUBFS::initialize(const Maze& maze)
 {
     releaseClResources();
@@ -76,6 +111,7 @@ void GPUBFS::initialize(const Maze& maze)
     height = maze.getHeight();
     int size = width * height;
 
+    // Host-oldali tükörmásolatok alaphelyzetbe állítása
     hostDist.assign(size, -1);
     hostParent.assign(size, -1);
     hostPath.clear();
@@ -84,6 +120,7 @@ void GPUBFS::initialize(const Maze& maze)
     startIndex = -1;
     goalIndex = -1;
 
+    // START/GOAL cellák megkeresése a rácsban
     for (int y = 0; y < height; y++)
         for (int x = 0; x < width; x++) {
             int idx = y * width + x;
@@ -91,6 +128,7 @@ void GPUBFS::initialize(const Maze& maze)
             if (maze.get(x, y) == GOAL)  goalIndex = idx;
         }
 
+    // A start cella távolsága 0, ez lesz az egyetlen kezdő frontier-elem
     hostDist[startIndex] = 0;
     currentDist = 0;
     done = false;
@@ -98,19 +136,22 @@ void GPUBFS::initialize(const Maze& maze)
     hostFrontierSize = 1;
 
     // --- GPU bufferek ---
+    // mazeBuf: csak olvasott, a labirintus celláinak típusait tartalmazza
     mazeBuf = clCreateBuffer(clm->getContext(),
         CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
         size * sizeof(uint8_t), (void*)maze.data().data(), nullptr);
 
+    // distBuf: BFS-távolságok, kezdetben minden cella -1 (kivéve a startot)
     distBuf = clCreateBuffer(clm->getContext(),
         CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
         size * sizeof(int), hostDist.data(), nullptr);
 
+    // parentBuf: melyik cellából értük el adott cellát (útvonal-rekonstrukció)
     parentBuf = clCreateBuffer(clm->getContext(),
         CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
         size * sizeof(int), hostParent.data(), nullptr);
 
-    // compact frontier indexlista
+    // compact frontier indexlista – kezdetben csak a start cella van benne
     std::vector<int> initFrontier(size, 0);
     initFrontier[0] = startIndex;
     frontierBuf = clCreateBuffer(clm->getContext(),
@@ -122,11 +163,13 @@ void GPUBFS::initialize(const Maze& maze)
         CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
         sizeof(int), &initSize, nullptr);
 
+    // a következő körben felfedezett cellák listája – kezdetben üres
     std::vector<int> emptyList(size, 0);
     nextFrontierBuf = clCreateBuffer(clm->getContext(),
         CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
         size * sizeof(int), emptyList.data(), nullptr);
 
+    // nextSizeBuf: atomikus számláló, hány elemet írtak a nextFrontierBuf-ba
     int zero = 0;
     nextSizeBuf = clCreateBuffer(clm->getContext(),
         CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
@@ -139,6 +182,9 @@ void GPUBFS::initialize(const Maze& maze)
         size * sizeof(int), minusOnes.data(), nullptr);
 
     // --- Kernelek betöltése ---
+    // KERNEL_DIR egy build-időben (CMake) definiált makró, amely a .cl
+    // fájlok elérési útját adja meg; ha nincs definiálva, alapértelmezésként
+    // a futtatható melletti "kernels/" mappát próbáljuk.
 #ifdef KERNEL_DIR
     std::string kernelDir = std::string(KERNEL_DIR);
 #else
@@ -157,26 +203,44 @@ void GPUBFS::initialize(const Maze& maze)
         return;
     }
 
+    // A két kernel (BFS-lépés és vizualizáció) lefordítása
     buildProgram(bfsSrc, "BFS kernel", bfsProgram, bfsKernel, "bfs_step");
     buildProgram(colorSrc, "Color kernel", colorProgram, colorKernel, "color_maze");
 }
 
 // -----------------------------------------------------------------------
+// step
+//   Egy BFS "hullámfront-kiterjesztés" elindítása a GPU-n:
+//     1) lenullázzuk a next frontier méretét számláló buffert,
+//     2) beállítjuk a kernel argumentumait és elindítjuk 1D NDRange-ben,
+//        annyi work-itemmel, ahány cella jelenleg a frontier-ben van,
+//     3) megvárjuk a kernel végét (clFinish),
+//     4) minimális adatot olvasunk vissza: csak a goal cella távolságát
+//        és az új frontier méretét (nem az egész tömböket – ez sokkal
+//        gyorsabb nagy labirintusok esetén),
+//     5) ha a goal elérhetővé vált, visszaolvassuk a teljes parent/dist
+//        tömböt is, és rekonstruáljuk az utat.
+// -----------------------------------------------------------------------
 bool GPUBFS::step(const Maze&)
 {
+    // Ha már korábban lezárult az algoritmus, nincs több dolgunk
     if (done) return true;
 
+    // Ha a kernel nem épült fel sikeresen (pl. hiányzó .cl fájl), nem
+    // tudunk lépni – jelezzük a hibát és zárjuk le sikertelenként.
     if (!bfsKernel) {
         std::cout << "GPUBFS::step() – nincs érvényes BFS kernel\n";
         done = true; foundFlag = false; return true;
     }
 
-    // nextSize nullázása
+    // nextSize nullázása – minden körben újra kell kezdeni a számlálást
     int zero = 0;
     clEnqueueWriteBuffer(clm->getQueue(), nextSizeBuf, CL_TRUE, 0,
         sizeof(int), &zero, 0, nullptr, nullptr);
 
     // Kernel args
+    // bfs_step(maze, distance, parent, frontierList, frontierSize,
+    //          nextFrontierList, nextSize, width, height, currentDist)
     clSetKernelArg(bfsKernel, 0, sizeof(cl_mem), &mazeBuf);
     clSetKernelArg(bfsKernel, 1, sizeof(cl_mem), &distBuf);
     clSetKernelArg(bfsKernel, 2, sizeof(cl_mem), &parentBuf);
@@ -188,6 +252,8 @@ bool GPUBFS::step(const Maze&)
     clSetKernelArg(bfsKernel, 8, sizeof(int), &height);
     clSetKernelArg(bfsKernel, 9, sizeof(int), &currentDist);
 
+    // Egy work-item / frontier-cella: pontosan annyi szálat indítunk,
+    // ahány eleme van a jelenlegi hullámfrontnak.
     size_t global = static_cast<size_t>(hostFrontierSize);
     clEnqueueNDRangeKernel(clm->getQueue(), bfsKernel, 1,
         nullptr, &global, nullptr, 0, nullptr, nullptr);
@@ -204,10 +270,12 @@ bool GPUBFS::step(const Maze&)
         sizeof(int), &goalDist,
         0, nullptr, nullptr);
 
+    // Az új (következő körben feldolgozandó) frontier mérete
     int hostNextSize = 0;
     clEnqueueReadBuffer(clm->getQueue(), nextSizeBuf, CL_TRUE, 0,
         sizeof(int), &hostNextSize, 0, nullptr, nullptr);
 
+    // A "next frontier" lesz a következő kör frontier-je (ping-pong buffercsere)
     std::swap(frontierBuf, nextFrontierBuf);
     hostFrontierSize = hostNextSize;
     currentDist++;
@@ -244,6 +312,8 @@ bool GPUBFS::step(const Maze&)
         return true;
     }
 
+    // Nincs több felfedezhető cella (a frontier kiürült), vagy elméletileg
+    // lehetetlenül sok kör telt el már (biztonsági korlát) -> nincs út a célhoz.
     if (hostNextSize == 0 || currentDist > width * height) {
         foundFlag = false;
         done = true;
@@ -252,6 +322,11 @@ bool GPUBFS::step(const Maze&)
     return done;
 }
 
+// -----------------------------------------------------------------------
+// reconstructPath
+//   A (GPU-ról frissen visszaolvasott) hostParent tömb mentén visszafelé
+//   lépkedve felépíti a hostPath listát a goal cellától a start celláig
+//   (amelynek parent értéke -1).
 // -----------------------------------------------------------------------
 void GPUBFS::reconstructPath(int goal)
 {
@@ -287,6 +362,7 @@ void GPUBFS::updateColorTexture(cl_mem colorImage, int revealCount)
     clSetKernelArg(colorKernel, 5, sizeof(int), &width);
     clSetKernelArg(colorKernel, 6, sizeof(int), &height);
 
+    // 2D NDRange: egy work-item / cella, a teljes rácsra kiterjesztve
     size_t global[2] = { (size_t)width, (size_t)height };
     clEnqueueNDRangeKernel(clm->getQueue(), colorKernel, 2,
         nullptr, global, nullptr, 0, nullptr, nullptr);
