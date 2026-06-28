@@ -44,7 +44,7 @@ int main()
     BFSMode mode = askBFSMode();
 
     // 1) Labirintus
-    Maze maze(128, 128);
+    Maze maze(64, 64);
     maze.generateRandom();
 
     // 2) Renderer + OpenGL context
@@ -70,58 +70,114 @@ int main()
 
     // 5) A vizualizációhoz MINDIG a GPUBFS objektum buffereit/kernelét
     //    használjuk (hiszen a Renderer a GL/CL interop textúrára épül).
-    //    GPU módban ez az objektum végzi magát a keresést is; CPU módban
-    //    csak "kirajzoló hídként" szolgál: a CPU-s eredményt minden
-    //    lépés után feltöltjük rá (lásd lejjebb, uploadVisualizationData).
+    //    GPU módban ez az objektum végzi magát a vizuális animációt;
+    //    CPU módban csak "kirajzoló hídként" szolgál: a CPU-s eredményt
+    //    minden lépés után feltöltjük rá (lásd lejjebb, uploadVisualizationData).
     GPUBFS gpuBfs;
     gpuBfs.setOpenCL(clManager);
     gpuBfs.initialize(maze);
 
-    // CPU-s implementáció – csak akkor használjuk a tényleges kereséshez,
-    // ha a felhasználó a CPU módot választotta, de mindig inicializáljuk,
-    // hogy ne kelljen elágazni az initialize()-on.
-    BFS cpuBfs;
-    cpuBfs.initialize(maze);
+    // -----------------------------------------------------------------------
+    // CPU mód: a mérés és a vizualizáció szét van választva.
+    //
+    // 1. MÉRÉS: a CPU BFS-t vizualizációtól függetlenül, tight loop-ban
+    //    futtatjuk le teljesen – így az animációs késleltetés (bfsStepInterval)
+    //    nem torzítja az időt.
+    //
+    // 2. VIZUALIZÁCIÓ: egy második BFS példány lépésről lépésre halad,
+    //    amelyet az animációs ciklus vezérel.
+    // -----------------------------------------------------------------------
+    Profiler cpuProfiler;
+    BFS      cpuBfsMeasure;   // csak méréshez
+    BFS      cpuBfsVisual;    // csak vizualizációhoz
 
-    // A BFSBase interfészen keresztül a főciklusnak nem kell tudnia,
-    // melyik konkrét implementációt futtatja – csak a step()/finished()/
-    // pathFound()/getPath()/getDistances() metódusokat hívja rajta.
+    if (mode == BFSMode::CPU)
+    {
+        std::cout << "CPU BFS merese (tight loop, vizualizacio nelkul)...\n";
+
+        cpuBfsMeasure.initialize(maze);
+
+        Stopwatch sw;
+        sw.start();
+        while (!cpuBfsMeasure.finished())
+        {
+            cpuBfsMeasure.step(maze);
+            cpuProfiler.cpuSteps++;
+        }
+        sw.stop(cpuProfiler.cpuTotalMs);
+
+        cpuProfiler.printCPU();
+        std::cout << "(Vizualizacio indul...)\n";
+
+        // Vizuális példány inicializálása – ez fog lépésről lépésre haladni
+        cpuBfsVisual.initialize(maze);
+    }
+
+    // -----------------------------------------------------------------------
+    // GPU mód: a mérés és a vizualizáció szét van választva.
+    //
+    // 1. MÉRÉS: egy külön GPUBFS példány tight loop-ban fut le teljesen –
+    //    az animációs késleltetés (bfsStepInterval) nem torzítja az időt.
+    //
+    // 2. VIZUALIZÁCIÓ: a fenti gpuBfs objektum lépésről lépésre halad,
+    //    amelyet az animációs ciklus vezérel. Ennek ideje NEM kerül mérésbe.
+    // -----------------------------------------------------------------------
+    Profiler gpuProfilerMeasure;
+
+    if (mode == BFSMode::GPU)
+    {
+        std::cout << "GPU BFS merese (tight loop, vizualizacio nelkul)...\n";
+
+        GPUBFS gpuBfsMeasure;
+        gpuBfsMeasure.setOpenCL(clManager);
+        gpuBfsMeasure.initialize(maze);
+
+        while (!gpuBfsMeasure.finished())
+            gpuBfsMeasure.step(maze);
+
+        gpuProfilerMeasure = gpuBfsMeasure.getProfiler();
+        gpuProfilerMeasure.printGPU();
+        std::cout << "(Vizualizacio indul...)\n";
+
+        // A vizualizációs gpuBfs már inicializálva van (5. lépésben),
+        // az animációs ciklus ezt lépteti – nem mérjük
+    }
+
+    // GPU módban a vizualizációs gpuBfs-t léptetjük (nem mért),
+    // CPU módban a cpuBfsVisual-t.
     BFSBase* bfsAlgo = (mode == BFSMode::GPU)
         ? static_cast<BFSBase*>(&gpuBfs)
-        : static_cast<BFSBase*>(&cpuBfs);
+        : static_cast<BFSBase*>(&cpuBfsVisual);
 
-    std::cout << ((mode == BFSMode::GPU) ? "GPU" : "CPU") << " BFS inditva.\n";
-
-    // CPU méréshez
-    Stopwatch cpuSw;
-    Profiler cpuProfiler;
-
-    const double bfsStepInterval = 0.03;
-    const double pathStepInterval = 0.01;
+    const int    CPU_STEPS_PER_FRAME = 15;    // vizuális sebesség hangolása
+    const double bfsStepInterval = 0.005;
+    const double pathStepInterval = 0.005;
 
     double lastBfsStep = glfwGetTime();
     double lastPathStep = glfwGetTime();
     int    pathReveal = 0;
-    bool statsPrinted = false;
+    bool   statsPrinted = false;
 
     while (!renderer.shouldClose())
     {
         double now = glfwGetTime();
 
-        // BFS lépés – mindig a kiválasztott algoritmuson (CPU vagy GPU) keresztül
+        // BFS lépés – mindig a kiválasztott algoritmuson (CPU vagy GPU) keresztül.
+        // Ez csak a VIZUALIZÁCIÓT vezérli, az időt NEM mérjük.
         if (!bfsAlgo->finished() && now - lastBfsStep >= bfsStepInterval) {
             lastBfsStep = now;
-            
-            if (mode == BFSMode::CPU) {
-                cpuSw.start();
-                bfsAlgo->step(maze);
-                cpuSw.stop(cpuProfiler.cpuTotalMs);
-                cpuProfiler.cpuSteps++;
 
-                // Vizualizációs adatok feltöltése GPU-ra
-                gpuBfs.uploadVisualizationData(bfsAlgo->getDistances(), bfsAlgo->getPath());
+            if (mode == BFSMode::CPU)
+            {
+                // Vizuális példány léptetése – NEM mérjük, csak animálunk
+                for (int i = 0; i < CPU_STEPS_PER_FRAME && !bfsAlgo->finished(); i++)
+                    bfsAlgo->step(maze);
+
+                gpuBfs.uploadVisualizationData(bfsAlgo->getDistances(),
+                    bfsAlgo->getPath());
             }
             else {
+                // Vizualizációs GPU példány léptetése – NEM mérjük
                 bfsAlgo->step(maze);
             }
         }
@@ -141,21 +197,10 @@ int main()
 
                 if (mode == BFSMode::GPU)
                 {
-                    gpuBfs.getProfiler().printGPU();
-                }
-                else
-                {
-                    cpuProfiler.printCPU();
-                }
+                    // A már korábban lefuttatott tight-loop mérés eredményét
+                    // írjuk ki – NEM a vizualizációs példányét
+                    const Profiler& gp = gpuProfilerMeasure;
 
-                // Mindkét módban GPU-n is lefuttatjuk a CPU BFS-t
-                // (csak mérési célból, ha CPU módban vagyunk),
-                // hogy speedupot lehessen számítani.
-                // Megjegyzés: ha GPU módban vagyunk, a CPU időt nem mértük,
-                // ezért csak GPU módban jelezzük a kernel vs transzfer arányt.
-                if (mode == BFSMode::GPU)
-                {
-                    const Profiler& gp = gpuBfs.getProfiler();
                     std::cout << "\n========== Kernel vs Transzfer arany ==========\n";
                     std::cout << std::fixed << std::setprecision(1);
                     if (gp.gpuTotalMs > 0) {
@@ -175,6 +220,7 @@ int main()
                             << "%\n";
                     }
                 }
+
                 std::cout << "\n(Az ablak bezarasaig a vizualizacio fut tovabb.)\n";
             }
         }
