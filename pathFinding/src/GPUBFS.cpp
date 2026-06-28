@@ -233,14 +233,21 @@ bool GPUBFS::step(const Maze&)
         done = true; foundFlag = false; return true;
     }
 
+    Stopwatch swTotal, swH2D, swKernel, swD2H;
+    swTotal.start();
+
     // nextSize nullázása – minden körben újra kell kezdeni a számlálást
+    swH2D.start();
     int zero = 0;
     clEnqueueWriteBuffer(clm->getQueue(), nextSizeBuf, CL_TRUE, 0,
         sizeof(int), &zero, 0, nullptr, nullptr);
 
+    swH2D.stop(profiler.gpuD2HMs);
+
     // Kernel args
     // bfs_step(maze, distance, parent, frontierList, frontierSize,
     //          nextFrontierList, nextSize, width, height, currentDist)
+    swKernel.start();
     clSetKernelArg(bfsKernel, 0, sizeof(cl_mem), &mazeBuf);
     clSetKernelArg(bfsKernel, 1, sizeof(cl_mem), &distBuf);
     clSetKernelArg(bfsKernel, 2, sizeof(cl_mem), &parentBuf);
@@ -258,12 +265,14 @@ bool GPUBFS::step(const Maze&)
     clEnqueueNDRangeKernel(clm->getQueue(), bfsKernel, 1,
         nullptr, &global, nullptr, 0, nullptr, nullptr);
     clFinish(clm->getQueue());
+    swKernel.stop(profiler.gpuKernelMs);
 
     // --- Optimalizált visszaolvasás ---
     // Csak 1 int-et olvasunk vissza a distBuf-ból (a goal cellát),
     // nem az egész tömböt (1000x1000 esetén ez 4MB vs 4 byte).
     // A teljes distBuf és parentBuf visszaolvasása csak akkor történik,
     // ha a goal elérhetővé vált.
+    swD2H.start();
     int goalDist = -1;
     clEnqueueReadBuffer(clm->getQueue(), distBuf, CL_TRUE,
         goalIndex * sizeof(int),   // offset: csak a goal cellája
@@ -274,17 +283,20 @@ bool GPUBFS::step(const Maze&)
     int hostNextSize = 0;
     clEnqueueReadBuffer(clm->getQueue(), nextSizeBuf, CL_TRUE, 0,
         sizeof(int), &hostNextSize, 0, nullptr, nullptr);
+    swD2H.stop(profiler.gpuD2HMs);
 
     // A "next frontier" lesz a következő kör frontier-je (ping-pong buffercsere)
     std::swap(frontierBuf, nextFrontierBuf);
     hostFrontierSize = hostNextSize;
     currentDist++;
+    profiler.gpuSteps++;
 
     if (goalDist != -1)
     {
         // Goal elérve: most olvassuk vissza a teljes parentBuf-ot
         // az útvonal rekonstruálásához (ez csak egyszer fut le)
         int size = width * height;
+        swD2H.start();
         clEnqueueReadBuffer(clm->getQueue(), parentBuf, CL_TRUE, 0,
             sizeof(int) * size, hostParent.data(), 0, nullptr, nullptr);
 
@@ -292,13 +304,14 @@ bool GPUBFS::step(const Maze&)
         // GPU-n olvassa, de hostDist kell a getDistances()-hez)
         clEnqueueReadBuffer(clm->getQueue(), distBuf, CL_TRUE, 0,
             sizeof(int) * size, hostDist.data(), 0, nullptr, nullptr);
-
+        swD2H.stop(profiler.gpuD2HMs);
         reconstructPath(goalIndex);
 
         // pathMask feltöltése GPU-ra:
         // hostPath[0] = goal, hostPath[last] = start
         // A start felőli animációhoz: path[pathLen-1-i] az i-edik megjelenített cella
         // Tehát pathMask[path[pathLen-1-i]] = i
+        swH2D.start();
         std::vector<int> hostPathMask(width * height, -1);
         for (int i = 0; i < hostPathLen; i++)
             hostPathMask[hostPath[hostPathLen - 1 - i]] = i;
@@ -306,9 +319,10 @@ bool GPUBFS::step(const Maze&)
         clEnqueueWriteBuffer(clm->getQueue(), pathMaskBuf, CL_TRUE, 0,
             sizeof(int) * width * height,
             hostPathMask.data(), 0, nullptr, nullptr);
-
+        swH2D.stop(profiler.gpuH2DMs);
         foundFlag = true;
         done = true;
+        swTotal.stop(profiler.gpuTotalMs);
         return true;
     }
 
@@ -319,6 +333,7 @@ bool GPUBFS::step(const Maze&)
         done = true;
     }
 
+    swTotal.stop(profiler.gpuTotalMs);
     return done;
 }
 
@@ -370,4 +385,48 @@ void GPUBFS::updateColorTexture(cl_mem colorImage, int revealCount)
     // 3) GL visszakapja a textúrát – szinkronizáció
     clEnqueueReleaseGLObjects(clm->getQueue(), 1, &colorImage, 0, nullptr, nullptr);
     clFinish(clm->getQueue());
+}
+
+// -----------------------------------------------------------------------
+// uploadVisualizationData
+//   "Híd" funkció: lehetővé teszi, hogy egy a GPUBFS-től független
+//   (pl. CPU-s, std::queue-alapú BFS::) algoritmus eredményét is meg
+//   tudjuk jeleníteni ugyanazon a GPU-s color_maze kernelen keresztül.
+//
+//   A főciklus (main.cpp) CPU módban minden BFS-lépés után ezt hívja meg
+//   a CPU-algoritmus aktuális distances/path adataival – ettől
+//   függetlenül, hogy ezeket nem a GPU számolta ki, a distBuf és a
+//   pathMaskBuf pontosan ugyanúgy néz ki utána, mintha a bfs_step kernel
+//   futott volna, így a vizualizáció (updateColorTexture) változatlanul
+//   működik.
+// -----------------------------------------------------------------------
+void GPUBFS::uploadVisualizationData(const std::vector<int>& distances, const std::vector<int>& path)
+{
+    // Csak akkor van értelme, ha initialize() már lefoglalta a buffereket
+    if (!distBuf || !pathMaskBuf) return;
+
+    int size = width * height;
+
+    // Távolság-tömb feltöltése – a color kernel ez alapján színezi ki
+    // a már bejárt ("visited") cellákat.
+    clEnqueueWriteBuffer(clm->getQueue(), distBuf, CL_TRUE, 0,
+        sizeof(int) * size, distances.data(), 0, nullptr, nullptr);
+
+    // pathMask felépítése ugyanúgy, mint a step()-ben:
+    // path[0] = goal, path[last] = start, az animáció a start felől indul,
+    // ezért pathMask[path[pathLen-1-i]] = i.
+    std::vector<int> mask(size, -1);
+    int pathLen = (int)path.size();
+    for (int i = 0; i < pathLen; i++)
+        mask[path[pathLen - 1 - i]] = i;
+
+    clEnqueueWriteBuffer(clm->getQueue(), pathMaskBuf, CL_TRUE, 0,
+        sizeof(int) * size, mask.data(), 0, nullptr, nullptr);
+
+    // Host-oldali tükörmásolatok frissítése, hogy a gpuBfs.getDistances()/
+    // getPath() is konzisztens adatot adjon vissza, ha valaki közvetlenül
+    // ezt az objektumot kérdezné le.
+    hostDist = distances;
+    hostPath = path;
+    hostPathLen = pathLen;
 }

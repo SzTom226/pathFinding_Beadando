@@ -3,6 +3,7 @@
 #include "BFSBase.h"
 #include "Maze.h"
 #include "OpenCLManager.h"
+#include "Profiler.h"
 
 #include <CL/cl.h>
 #include <CL/cl_gl.h>
@@ -50,6 +51,17 @@ public:
     // Interop: a color kernel futtatása a megosztott GL textúrára
     // colorImage = Renderer::getColorImage()
     void updateColorTexture(cl_mem colorImage, int revealCount);
+
+    // Lehetővé teszi, hogy egy MÁSIK (pl. CPU-s) BFS implementáció
+    // eredményét is meg lehessen jeleníteni ugyanazon a GPU-s
+    // colorMaze pipeline-on keresztül: feltölti a distBuf-ot és a
+    // pathMaskBuf-ot a megadott adatokkal, anélkül, hogy a GPU BFS
+    // kernel (bfs_step) futna. Ezt kell hívni minden CPU-s BFS lépés
+    // után, ha a kirajzolást ez a GPUBFS objektum végzi.
+    void uploadVisualizationData(const std::vector<int>& distances, const std::vector<int>& path);
+
+    //Profilizási adatok lekérése
+    const Profiler& getProfiler() const { return profiler; }
 
 private:
     // A hostParent tömb alapján (amit csak a cél elérésekor olvasunk
@@ -105,4 +117,6 @@ private:
     std::vector<int> hostPath;     // a végső, rekonstruált útvonal
 
     int hostFrontierSize = 0;   // hány elem van jelenleg a frontierBuf-ban
+
+    Profiler profiler;
 };
